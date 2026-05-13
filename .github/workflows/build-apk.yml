@@ -27,26 +27,31 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17' distribution:'temurin'
+          java-version: '17'
+          distribution: 'temurin'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Generate Android project
         run: |
-          mkdir -p nativefy-build/app/src/main/java/$(echo "${{ github.event.inputs.package_name }}" | tr '.' '/')
+          PKG="${{ github.event.inputs.package_name }}"
+          PKG_PATH=$(echo "$PKG" | tr . /)
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          WEBSITE_URL="${{ github.event.inputs.website_url }}"
+          CONV_ID="${{ github.event.inputs.conversion_id }}"
+
+          mkdir -p nativefy-build/app/src/main/java/$PKG_PATH
           mkdir -p nativefy-build/app/src/main/res/layout
           mkdir -p nativefy-build/app/src/main/res/values
           mkdir -p nativefy-build/app/src/main/res/xml
           mkdir -p nativefy-build/gradle/wrapper
 
-          # settings.gradle
           cat > nativefy-build/settings.gradle << 'EOF'
 rootProject.name = "NativefyApp"
 include ':app'
 EOF
 
-          # root build.gradle
           cat > nativefy-build/build.gradle << 'EOF'
 buildscript {
     repositories { google(); mavenCentral() }
@@ -56,7 +61,6 @@ allprojects { repositories { google(); mavenCentral() } }
 task clean(type: Delete) { delete rootProject.buildDir }
 EOF
 
-          # gradle wrapper properties
           cat > nativefy-build/gradle/wrapper/gradle-wrapper.properties << 'EOF'
 distributionBase=GRADLE_USER_HOME
 distributionPath=wrapper/dists
@@ -65,20 +69,14 @@ zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists
 EOF
 
-          # Download gradle wrapper jar
           curl -sL https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar -o nativefy-build/gradle/wrapper/gradle-wrapper.jar || true
 
-          # gradlew script
           cat > nativefy-build/gradlew << 'GRADLEW'
 #!/bin/sh
 exec java -jar "$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar" "$@"
 GRADLEW
           chmod +x nativefy-build/gradlew
 
-          PKG="${{ github.event.inputs.package_name }}"
-          PKG_PATH=$(echo "$PKG" | tr '.' '/')
-
-          # app/build.gradle
           cat > nativefy-build/app/build.gradle << EOF
 plugins { id 'com.android.application' }
 android {
@@ -99,18 +97,20 @@ android {
     }
 }
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1' implementation'com.google.android.material:material:1.11.0' implementation'androidx.constraintlayout:constraintlayout:2.1.4' implementation'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
 }
 EOF
 
-          # AndroidManifest.xml
           cat > nativefy-build/app/src/main/AndroidManifest.xml << EOF
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="$PKG">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application android:allowBackup="true" android:icon="@mipmap/ic_launcher"
-        android:label="${{ github.event.inputs.app_name }}"
+        android:label="$APP_NAME"
         android:theme="@style/Theme.AppCompat.Light.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden">
@@ -123,18 +123,16 @@ EOF
 </manifest>
 EOF
 
-          # MainActivity.java
           cat > nativefy-build/app/src/main/java/$PKG_PATH/MainActivity.java << EOF
 package $PKG;
 import android.os.Bundle;
-import android.view.View;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity {
     private WebView webView;
-    private static final String WEBSITE_URL = "${{ github.event.inputs.website_url }}";
+    private static final String WEBSITE_URL = "$WEBSITE_URL";
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -155,11 +153,10 @@ public class MainActivity extends AppCompatActivity {
 }
 EOF
 
-          # strings.xml
           cat > nativefy-build/app/src/main/res/values/strings.xml << EOF
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">${{ github.event.inputs.app_name }}</string>
+    <string name="app_name">$APP_NAME</string>
 </resources>
 EOF
 
