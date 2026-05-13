@@ -1,0 +1,176 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      conversion_id:
+        description: 'Nativefy conversion ID'
+        required: true
+      app_name:
+        description: 'App name'
+        required: true
+      package_name:
+        description: 'Android package name'
+        required: false
+        default: 'com.nativefy.app'
+      website_url:
+        description: 'Website URL to wrap'
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17' distribution:'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Generate Android project
+        run: |
+          mkdir -p nativefy-build/app/src/main/java/$(echo "${{ github.event.inputs.package_name }}" | tr '.' '/')
+          mkdir -p nativefy-build/app/src/main/res/layout
+          mkdir -p nativefy-build/app/src/main/res/values
+          mkdir -p nativefy-build/app/src/main/res/xml
+          mkdir -p nativefy-build/gradle/wrapper
+
+          # settings.gradle
+          cat > nativefy-build/settings.gradle << 'EOF'
+rootProject.name = "NativefyApp"
+include ':app'
+EOF
+
+          # root build.gradle
+          cat > nativefy-build/build.gradle << 'EOF'
+buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies { classpath 'com.android.tools.build:gradle:8.2.0' }
+}
+allprojects { repositories { google(); mavenCentral() } }
+task clean(type: Delete) { delete rootProject.buildDir }
+EOF
+
+          # gradle wrapper properties
+          cat > nativefy-build/gradle/wrapper/gradle-wrapper.properties << 'EOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.2-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
+
+          # Download gradle wrapper jar
+          curl -sL https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar -o nativefy-build/gradle/wrapper/gradle-wrapper.jar || true
+
+          # gradlew script
+          cat > nativefy-build/gradlew << 'GRADLEW'
+#!/bin/sh
+exec java -jar "$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar" "$@"
+GRADLEW
+          chmod +x nativefy-build/gradlew
+
+          PKG="${{ github.event.inputs.package_name }}"
+          PKG_PATH=$(echo "$PKG" | tr '.' '/')
+
+          # app/build.gradle
+          cat > nativefy-build/app/build.gradle << EOF
+plugins { id 'com.android.application' }
+android {
+    compileSdk 34
+    defaultConfig {
+        applicationId "$PKG"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+    buildTypes {
+        debug { minifyEnabled false }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1' implementation'com.google.android.material:material:1.11.0' implementation'androidx.constraintlayout:constraintlayout:2.1.4' implementation'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+}
+EOF
+
+          # AndroidManifest.xml
+          cat > nativefy-build/app/src/main/AndroidManifest.xml << EOF
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="$PKG">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <application android:allowBackup="true" android:icon="@mipmap/ic_launcher"
+        android:label="${{ github.event.inputs.app_name }}"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+        <activity android:name=".MainActivity" android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+EOF
+
+          # MainActivity.java
+          cat > nativefy-build/app/src/main/java/$PKG_PATH/MainActivity.java << EOF
+package $PKG;
+import android.os.Bundle;
+import android.view.View;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import androidx.appcompat.app.AppCompatActivity;
+public class MainActivity extends AppCompatActivity {
+    private WebView webView;
+    private static final String WEBSITE_URL = "${{ github.event.inputs.website_url }}";
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        webView = new WebView(this);
+        setContentView(webView);
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
+        webView.setWebViewClient(new WebViewClient());
+        webView.loadUrl(WEBSITE_URL);
+    }
+    @Override
+    public void onBackPressed() {
+        if (webView.canGoBack()) { webView.goBack(); } else { super.onBackPressed(); }
+    }
+}
+EOF
+
+          # strings.xml
+          cat > nativefy-build/app/src/main/res/values/strings.xml << EOF
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">${{ github.event.inputs.app_name }}</string>
+</resources>
+EOF
+
+      - name: Build Debug APK
+        working-directory: nativefy-build
+        run: |
+          gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-${{ github.event.inputs.conversion_id }}
+          path: nativefy-build/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
